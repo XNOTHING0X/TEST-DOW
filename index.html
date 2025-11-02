@@ -1,0 +1,220 @@
+
+<html lang="pl">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+  <title>Speed Test - NOTHING_X</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    body {
+      background: #000;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      align-items: center;
+      height: 100vh;
+      font-family: 'Courier New', monospace;
+      color: #ff1a1a;
+    }
+
+    .taskbar {
+      width: 90vw;
+      max-width: 700px;
+      height: 40px;
+      background: #111;
+      border-radius: 20px;
+      overflow: hidden;
+      position: relative;
+      box-shadow: 0 0 30px rgba(255, 26, 26, 0.oban3);
+      margin: 20px 0;
+    }
+
+    .fill {
+      height: 100%;
+      width: 0%;
+      background: linear-gradient(90deg, #ff1a1a, #ff4d4d, #ff6666);
+      transition: width 0.1s ease;
+      border-radius: 20px;
+      box-shadow: 0 0 20px rgba(255, 26, 26, 0.7);
+    }
+
+    .speed-label {
+      position: absolute;
+      top: 0;
+      left: 0;
+      width: 100%;
+      height: 100%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: white;
+      font-weight: bold;
+      font-size: 1.3rem;
+      text-shadow: 0 0 10px black, 0 0 20px #ff1a1a;
+      pointer-events: none;
+      z-index: 2;
+    }
+
+    .result {
+      color: #ff1a1a;
+      font-size: 1.7rem;
+      font-weight: bold;
+      opacity: 0;
+      transition: opacity 0.7s ease;
+      text-shadow: 0 0 15px #ff1a1a, 0 0 25px #ff4d4d;
+      margin: 10px 0;
+    }
+
+    .result.show {
+      opacity: 1;
+    }
+
+    .btn {
+      padding: 14px 36px;
+      font-size: 1.2rem;
+      font-weight: bold;
+      color: #ff1a1a;
+      background: transparent;
+      border: 2px solid #ff1a1a;
+      border-radius: 30px;
+      cursor: pointer;
+      transition: all 0.3s ease;
+      box-shadow: 0 0 20px rgba(255, 26, 26, 0.4);
+      margin: 10px;
+    }
+
+    .btn:hover {
+      background: rgba(255, 26, 26, 0.1);
+      box-shadow: 0 0 30px #ff1a1a;
+      transform: scale(1.08);
+    }
+
+    .btn:active {
+      transform: scale(0.95);
+    }
+
+    .hidden {
+      display: none !important;
+    }
+
+    @keyframes pulse-red {
+      0%, 100% { box-shadow: 0 0 25px rgba(255, 26, 26, 0.5); }
+      50% { box-shadow: 0 0 40px rgba(255, 26, 26, 0.9); }
+    }
+
+    .taskbar.testing {
+      animation: pulse-red 1.5s infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <button class="btn" id="startBtn">Start</button>
+
+  <div class="taskbar" id="taskbar" style="display: none;">
+    <div class="fill" id="fill"></div>
+    <div class="speed-label" id="speedLabel">0.00 Mbps</div>
+  </div>
+
+  <div class="result" id="result"></div>
+
+  <button class="btn hidden" id="restBtn">Rest</button>
+
+  <script>
+    const startBtn = document.getElementById('startBtn');
+    const taskbar = document.getElementById('taskbar');
+    const fill = document.getElementById('fill');
+    const speedLabel = document.getElementById('speedLabel');
+    const result = document.getElementById('result');
+    const restBtn = document.getElementById('restBtn');
+
+    const TEST_DURATION = 60000;
+    const TEST_FILE_SIZE = 60 * 1024 * 1024;
+    const MAX_SCALE = 250;
+
+    let maxSpeed = 0;
+    let startTime;
+    let isTesting = false;
+
+    async function runTest() {
+      if (isTesting) return;
+      isTesting = true;
+
+      startBtn.classList.add('hidden');
+      taskbar.style.display = 'block';
+      result.classList.remove('show');
+      restBtn.classList.add('hidden');
+
+      fill.style.width = '0%';
+      speedLabel.textContent = '0.00 Mbps';
+      maxSpeed = 0;
+      taskbar.classList.add('testing');
+
+      startTime = performance.now();
+
+      try {
+        const response = await fetch(
+          `https://speed.cloudflare.com/__down?bytes=${TEST_FILE_SIZE}&_=${Date.now()}`,
+          { cache: 'no-store' }
+        );
+        const reader = response.body.getReader();
+        let received = 0;
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          received += value.length;
+          const elapsedSec = (performance.now() - startTime) / 1000;
+          if (elapsedSec === 0) continue;
+
+          const speedMbps = (received * 8) / (elapsedSec * 1000000);
+
+          speedLabel.textContent = speedMbps.toFixed(2) + ' Mbps';
+          const percent = Math.min((speedMbps / MAX_SCALE) * 100, 100);
+          fill.style.width = percent + '%';
+
+          if (speedMbps > maxSpeed) maxSpeed = speedMbps;
+
+          if (performance.now() - startTime >= TEST_DURATION) {
+            reader.cancel();
+            break;
+          }
+        }
+      } catch (e) {
+        console.error(e);
+      }
+
+      taskbar.classList.remove('testing');
+      speedLabel.textContent = 'MAX';
+      fill.style.width = '100%';
+      fill.style.background = '#ff1a1a';
+
+      setTimeout(() => {
+        result.textContent = `MAX: ${maxSpeed.toFixed(2)} Mbps`;
+        result.classList.add('show');
+        restBtn.classList.remove('hidden');
+        isTesting = false;
+      }, 600);
+    }
+
+    startBtn.onclick = () => {
+      runTest();
+    };
+
+    restBtn.onclick = () => {
+      taskbar.style.display = 'none';
+      result.classList.remove('show');
+      restBtn.classList.add('hidden');
+      startBtn.classList.remove('hidden');
+    };
+
+    taskbar.style.display = 'none';
+  </script>
+</body>
+</html>
