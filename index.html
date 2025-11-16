@@ -4,6 +4,7 @@
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
 <title>Speed Test - NOTHING_X</title>
+<link rel="icon" href="data:,">
 <style>
 *{margin:0;padding:0;box-sizing:border-box}
 body{
@@ -123,10 +124,10 @@ const speedLabel = document.getElementById('speedLabel');
 const result = document.getElementById('result');
 const restBtn = document.getElementById('restBtn');
 
-const TEST_DURATION = 17001;
-const CHUNK_SIZE = 1000 * 1024 * 1024;
+const TEST_DURATION = 14000;
+const CHUNK_SIZE = 222 * 1024 * 1024;
 const MAX_SCALE = 259;
-const PARALLEL_CONNECTIONS = 766;
+const PARALLEL_CONNECTIONS = 8;
 
 let isTesting = false;
 let animationId = null;
@@ -135,6 +136,9 @@ let maxSpeed = 0;
 let startTime = 0;
 let lastFrameTime = 0;
 let controllers = [];
+
+
+document.head.insertAdjacentHTML('beforeend', '<link rel="icon" href="data:,">');
 
 function createMarkers() {
     taskbarWrapper.querySelectorAll('.marker').forEach(m => m.remove());
@@ -177,24 +181,18 @@ async function runDownloadTest() {
     speedLabel.textContent = '0.00 Mbps';
     createMarkers();
 
-    const servers = [
-        'https://speed.cloudflare.com/__down?bytes=',
-        'https://storage.googleapis.com/public-bucket-1gb/__down?bytes=',
-        'https://cdn.fastly.io/test/__down?bytes='
-    ];
-
+    const baseUrl = 'https://speed.cloudflare.com/__down?bytes=';
     const promises = [];
     controllers = [];
 
     for (let i = 0; i < PARALLEL_CONNECTIONS; i++) {
         const controller = new AbortController();
         controllers.push(controller);
-        const url = `${servers[i % servers.length]}${CHUNK_SIZE}&_=${Date.now()}`;
+        const url = `${baseUrl}${CHUNK_SIZE}&_=${Date.now() + i}`;
         promises.push(downloadChunk(url, controller.signal));
     }
 
     setTimeout(() => controllers.forEach(c => c.abort()), TEST_DURATION);
-
     await Promise.race([Promise.allSettled(promises), new Promise(r => setTimeout(r, TEST_DURATION))]);
     controllers.forEach(c => c.abort());
     controllers = [];
@@ -214,7 +212,7 @@ async function downloadChunk(url, signal) {
             updateSpeed();
         }
     } catch (e) {
-        // ciche błędy
+        // Ignoruj błędy – Cloudflare czasem ogranicza
     }
 }
 
@@ -246,7 +244,7 @@ startBtn.onclick = async () => {
     result.classList.remove('show');
     restBtn.classList.add('hidden');
 
-    status.textContent = "Mierzenie ping...";
+
     const ping = await measurePing();
     status.textContent = "Pobieranie danych...";
 
