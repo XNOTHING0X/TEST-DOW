@@ -1,3 +1,5 @@
+<!DOCTYPE html>
+<html lang="pl">
 <head>
 <meta charset="UTF-8"/>
 <meta name="viewport" content="width=device-width, initial-scale=1.0"/>
@@ -28,7 +30,6 @@ height:100%;
 background:#111;
 border:1px solid #333;
 overflow:hidden;
-position:relative;
 border-radius:12px
 }
 .fill{
@@ -58,8 +59,7 @@ width:2px;
 height:100%;
 background:#555;
 z-index:1;
-transform:translateX(-50%);
-border-radius:6px
+transform:translateX(-50%)
 }
 .status{
 color:#ff1a1a;
@@ -113,123 +113,165 @@ cursor:not-allowed
 </div>
 <div class="result" id="result"></div>
 <button class="btn hidden" id="restBtn">Reset</button>
+
 <script>
-const startBtn=document.getElementById('startBtn');
-const status=document.getElementById('status');
-const taskbarWrapper=document.getElementById('taskbarWrapper');
-const fill=document.getElementById('fill');
-const speedLabel=document.getElementById('speedLabel');
-const result=document.getElementById('result');
-const restBtn=document.getElementById('restBtn');
-const TEST_DURATION=20000;
-const TEST_FILE_SIZE=3000*1024*1024;
-const MAX_SCALE=259;
-let isTesting=false;
-let reader;
-let animationId;
+const startBtn = document.getElementById('startBtn');
+const status = document.getElementById('status');
+const taskbarWrapper = document.getElementById('taskbarWrapper');
+const fill = document.getElementById('fill');
+const speedLabel = document.getElementById('speedLabel');
+const result = document.getElementById('result');
+const restBtn = document.getElementById('restBtn');
 
-function createMarkers(){
-taskbarWrapper.querySelectorAll('.marker').forEach(m=>m.remove());
-for(let i=10;i<=MAX_SCALE;i+=10){
-const percent=(i/MAX_SCALE)*100;
-const marker=document.createElement('div');
-marker.classList.add('marker');
-marker.style.left=percent+'%';
-taskbarWrapper.appendChild(marker);
-}
-}
+const TEST_DURATION = 17001;
+const CHUNK_SIZE = 1000 * 1024 * 1024;
+const MAX_SCALE = 259;
+const PARALLEL_CONNECTIONS = 766;
 
-async function measurePing(){
-const start=performance.now();
-try{
-const controller=new AbortController();
-setTimeout(()=>controller.abort(),5000);
-await fetch("https://www.google.com/favicon.ico?_="+Date.now(),{
-method:'GET',
-mode:'no-cors',
-cache:'no-store',
-signal:controller.signal
-});
-const ping=Math.round(performance.now()-start);
-return ping<10000?ping+" ms":"Timeout";
-}catch{
-return"Timeout";
-}
+let isTesting = false;
+let animationId = null;
+let totalReceived = 0;
+let maxSpeed = 0;
+let startTime = 0;
+let lastFrameTime = 0;
+let controllers = [];
+
+function createMarkers() {
+    taskbarWrapper.querySelectorAll('.marker').forEach(m => m.remove());
+    for (let i = 10; i <= MAX_SCALE; i += 10) {
+        const percent = (i / MAX_SCALE) * 100;
+        const marker = document.createElement('div');
+        marker.classList.add('marker');
+        marker.style.left = percent + '%';
+        taskbarWrapper.appendChild(marker);
+    }
 }
 
-async function runDownloadTest(){
-let received=0;
-let maxSpeed=0;
-const startTime=performance.now();
-taskbarWrapper.classList.remove('hidden');
-fill.style.width='0%';
-speedLabel.textContent='0.00 Mbps';
-createMarkers();
-const url=`https://speed.cloudflare.com/__down?bytes=${TEST_FILE_SIZE}&_=${Date.now()}`;
-try{
-const response=await fetch(url,{cache:'no-store'});
-if(!response.ok)throw new Error();
-reader=response.body.getReader();
-const updateSpeed=()=>{
-const now=performance.now();
-const elapsed=(now-startTime)/1000;
-if(elapsed===0)return;
-const speed=(received*8)/(elapsed*1000000);
-speedLabel.textContent=speed.toFixed(2)+' Mbps';
-const percent=Math.min((speed/MAX_SCALE)*100,100);
-fill.style.width=percent+'%';
-if(speed>maxSpeed)maxSpeed=speed;
-if(isTesting&&(now-startTime)<TEST_DURATION){
-animationId=requestAnimationFrame(updateSpeed);
+async function measurePing() {
+    const start = performance.now();
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 3000);
+    try {
+        await fetch("https://www.google.com/favicon.ico?_=" + Date.now(), {
+            method: 'GET',
+            mode: 'no-cors',
+            cache: 'no-store',
+            signal: controller.signal
+        });
+        clearTimeout(timeout);
+        const ping = Math.round(performance.now() - start);
+        return ping < 3000 ? ping + " ms" : "Timeout";
+    } catch {
+        clearTimeout(timeout);
+        return "Timeout";
+    }
 }
+
+async function runDownloadTest() {
+    totalReceived = 0;
+    maxSpeed = 0;
+    startTime = performance.now();
+    lastFrameTime = startTime;
+    taskbarWrapper.classList.remove('hidden');
+    fill.style.width = '0%';
+    speedLabel.textContent = '0.00 Mbps';
+    createMarkers();
+
+    const servers = [
+        'https://speed.cloudflare.com/__down?bytes=',
+        'https://storage.googleapis.com/public-bucket-1gb/__down?bytes=',
+        'https://cdn.fastly.io/test/__down?bytes='
+    ];
+
+    const promises = [];
+    controllers = [];
+
+    for (let i = 0; i < PARALLEL_CONNECTIONS; i++) {
+        const controller = new AbortController();
+        controllers.push(controller);
+        const url = `${servers[i % servers.length]}${CHUNK_SIZE}&_=${Date.now()}`;
+        promises.push(downloadChunk(url, controller.signal));
+    }
+
+    setTimeout(() => controllers.forEach(c => c.abort()), TEST_DURATION);
+
+    await Promise.race([Promise.allSettled(promises), new Promise(r => setTimeout(r, TEST_DURATION))]);
+    controllers.forEach(c => c.abort());
+    controllers = [];
+
+    return maxSpeed;
+}
+
+async function downloadChunk(url, signal) {
+    try {
+        const response = await fetch(url, { cache: 'no-store', signal });
+        if (!response.ok) return;
+        const reader = response.body.getReader();
+        while (true) {
+            const { done, value } = await reader.read();
+            if (done || !isTesting) break;
+            totalReceived += value.length;
+            updateSpeed();
+        }
+    } catch (e) {
+        // ciche błędy
+    }
+}
+
+function updateSpeed() {
+    const now = performance.now();
+    if (now - lastFrameTime < 16) return;
+    lastFrameTime = now;
+
+    const elapsed = (now - startTime) / 1000;
+    if (elapsed === 0) return;
+
+    const speed = (totalReceived * 8) / (elapsed * 1000000);
+    speedLabel.textContent = speed.toFixed(2) + ' Mbps';
+    const percent = Math.min((speed / MAX_SCALE) * 100, 100);
+    fill.style.width = percent + '%';
+
+    if (speed > maxSpeed) maxSpeed = speed;
+
+    if (isTesting && (now - startTime) < TEST_DURATION) {
+        animationId = requestAnimationFrame(updateSpeed);
+    }
+}
+
+startBtn.onclick = async () => {
+    if (isTesting) return;
+    isTesting = true;
+    startBtn.classList.add('hidden');
+    status.classList.add('show');
+    result.classList.remove('show');
+    restBtn.classList.add('hidden');
+
+    status.textContent = "Mierzenie ping...";
+    const ping = await measurePing();
+    status.textContent = "Pobieranie danych...";
+
+    const speed = await runDownloadTest();
+
+    taskbarWrapper.classList.add('hidden');
+    result.innerHTML = `Ping: ${ping}<br>Download: ${speed.toFixed(2)} Mbps`;
+    result.classList.add('show');
+    status.classList.remove('show');
+    restBtn.classList.remove('hidden');
+    isTesting = false;
 };
-const read=async()=>{
-const{done,value}=await reader.read();
-if(done)return;
-received+=value.length;
-if(isTesting){
-read();
-updateSpeed();
-}
-};
-read();
-animationId=requestAnimationFrame(updateSpeed);
-await new Promise(r=>setTimeout(r,TEST_DURATION));
-cancelAnimationFrame(animationId);
-reader.cancel();
-return maxSpeed;
-}catch(e){
-return 0;
-}
-}
 
-startBtn.onclick=async()=>{
-if(isTesting)return;
-startBtn.classList.add('hidden');
-isTesting=true;
-status.classList.add('show');
-result.classList.remove('show');
-const ping=await measurePing();
-const speed=await runDownloadTest();
-taskbarWrapper.classList.add('hidden');
-result.innerHTML=`Ping: ${ping}<br>Download: ${speed.toFixed(2)} Mbps`;
-result.classList.add('show');
-status.classList.remove('show');
-restBtn.classList.remove('hidden');
-isTesting=false;
-};
-
-restBtn.onclick=()=>{
-isTesting=false;
-if(animationId)cancelAnimationFrame(animationId);
-if(reader)reader.cancel();
-taskbarWrapper.classList.add('hidden');
-result.classList.remove('show');
-status.classList.remove('show');
-restBtn.classList.add('hidden');
-startBtn.classList.remove('hidden');
-fill.style.width='0%';
-speedLabel.textContent='0.00 Mbps';
+restBtn.onclick = () => {
+    isTesting = false;
+    if (animationId) cancelAnimationFrame(animationId);
+    controllers.forEach(c => c.abort());
+    controllers = [];
+    taskbarWrapper.classList.add('hidden');
+    result.classList.remove('show');
+    status.classList.remove('show');
+    restBtn.classList.add('hidden');
+    startBtn.classList.remove('hidden');
+    fill.style.width = '0%';
+    speedLabel.textContent = '0.00 Mbps';
 };
 </script>
 </body>
